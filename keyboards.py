@@ -1,10 +1,18 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
-def replace_confirm_kb(number: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Заменить", callback_data=f"replace:yes:{number}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="replace:no"),
+def replace_note_keyboard(number: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Заменить",
+                    callback_data=f"replace_note:{number}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="cancel_replace"
+                )
+            ]
         ]
-    ])
+    )
