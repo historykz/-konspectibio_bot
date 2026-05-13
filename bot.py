@@ -8,7 +8,7 @@ CallbackQueryHandler, ContextTypes, filters
 from database import Database
 
 logging.basicConfig(
-format="%(asctime)s – %(name)s – %(levelname)s – %(message)s",
+format=”%(asctime)s - %(name)s - %(levelname)s - %(message)s”,
 level=logging.INFO
 )
 logger = logging.getLogger(**name**)
@@ -39,8 +39,8 @@ await update.message.reply_text(
 f”👋 Привет, <b>{user.first_name}</b>!\n\n”
 f”📚 Это бот для получения конспектов.\n\n”
 f”<b>Команды:</b>\n”
-f”• /list — список всех конспектов\n”
-f”• /get <номер> — получить конспект\n”
+f”• /list - список всех конспектов\n”
+f”• /get <номер> - получить конспект\n”
 f”  Пример: <code>/get 29</code>{admin_hint}”,
 parse_mode=“HTML”
 )
@@ -56,7 +56,7 @@ await update.message.reply_text(“📭 Конспектов пока нет.”
 return
 lines = [“📚 <b>Список конспектов:</b>\n”]
 for note_id, title in notes:
-lines.append(f”• <code>{note_id:02d}</code> — {title}”)
+lines.append(f”• <code>{note_id:02d}</code> - {title}”)
 lines.append(”\n✏️ Чтобы получить: <code>/get <номер></code>”)
 await update.message.reply_text(”\n”.join(lines), parse_mode=“HTML”)
 
@@ -140,8 +140,8 @@ elif data == "admin_users":
     else:
         lines = [f"👥 <b>Ученики ({len(users)}):</b>\n"]
         for uid, username, first_name in users:
-            name = f"@{username}" if username else (first_name or "—")
-            lines.append(f"• <code>{uid}</code> — {name}")
+            name = f"@{username}" if username else (first_name or "-")
+            lines.append(f"• <code>{uid}</code> - {name}")
         text = "\n".join(lines)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(BACK_BTN))
 
@@ -152,7 +152,7 @@ elif data == "admin_notes":
     else:
         lines = [f"📚 <b>Конспекты ({len(notes)}):</b>\n"]
         for note_id, title in notes:
-            lines.append(f"• <code>{note_id:02d}</code> — {title}")
+            lines.append(f"• <code>{note_id:02d}</code> - {title}")
         text = "\n".join(lines)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(BACK_BTN))
 
@@ -178,8 +178,8 @@ elif data == "admin_removeuser":
         return
     lines = ["❌ <b>Удалить ученика</b>\n\nОтправьте @username или ID:\n"]
     for uid, username, first_name in users:
-        name = f"@{username}" if username else (first_name or "—")
-        lines.append(f"• <code>{uid}</code> — {name}")
+        name = f"@{username}" if username else (first_name or "-")
+        lines.append(f"• <code>{uid}</code> - {name}")
     await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(BACK_BTN))
 
 elif data == "admin_upload":
@@ -190,7 +190,7 @@ elif data == "admin_upload":
         "<code>29 Название темы</code>\n\n"
         "<b>Пример:</b>\n"
         "<code>29 Фотосинтез и его стадии</code>\n\n"
-        "⚠️ Первое слово — номер конспекта.",
+        "⚠️ Первое слово - номер конспекта.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(BACK_BTN)
     )
@@ -203,7 +203,7 @@ elif data == "admin_deletenote":
         return
     lines = ["🗑 <b>Удалить конспект</b>\n\nОтправьте номер:\n"]
     for note_id, title in notes:
-        lines.append(f"• <code>{note_id:02d}</code> — {title}")
+        lines.append(f"• <code>{note_id:02d}</code> - {title}")
     await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(BACK_BTN))
 ```
 
@@ -236,7 +236,7 @@ if is_admin(user_id) and WAITING_UPLOAD.get(user_id):
             db.add_note(note_number, title, file_id)
             status = "✅ Конспект добавлен"
         WAITING_UPLOAD.pop(user_id, None)
-        await message.reply_text(f"{status}!\n\n📄 <b>№{note_number:02d}</b> — {title}", parse_mode="HTML")
+        await message.reply_text(f"{status}!\n\n📄 <b>№{note_number:02d}</b> - {title}", parse_mode="HTML")
     else:
         await message.reply_text("❗ Отправьте PDF файл с подписью: <code>29 Название темы</code>", parse_mode="HTML")
     return
@@ -316,7 +316,7 @@ if not is_allowed(user_id):
     return
 
 await message.reply_text(
-    "Используйте команды:\n• /list — список конспектов\n• /get &lt;номер&gt; — получить конспект",
+    "Используйте команды:\n• /list - список конспектов\n• /get &lt;номер&gt; - получить конспект",
     parse_mode="HTML"
 )
 ```
@@ -385,8 +385,8 @@ await update.message.reply_text(“👥 Список учеников пуст.�
 return
 lines = [f”👥 <b>Ученики ({len(users)}):</b>\n”]
 for uid, username, first_name in users:
-name = f”@{username}” if username else (first_name or “—”)
-lines.append(f”• <code>{uid}</code> — {name}”)
+name = f”@{username}” if username else (first_name or “-”)
+lines.append(f”• <code>{uid}</code> - {name}”)
 await update.message.reply_text(”\n”.join(lines), parse_mode=“HTML”)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -397,20 +397,20 @@ return
 if is_admin(user.id):
 text = (
 “🔧 <b>Команды администратора:</b>\n\n”
-“/admin — панель управления\n”
-“/adduser @u1 @u2 — добавить учеников\n”
-“/removeuser @u — удалить ученика\n”
-“/users — список учеников\n”
-“/list — список конспектов\n”
-“/get <номер> — получить конспект\n\n”
+“/admin - панель управления\n”
+“/adduser @u1 @u2 - добавить учеников\n”
+“/removeuser @u - удалить ученика\n”
+“/users - список учеников\n”
+“/list - список конспектов\n”
+“/get <номер> - получить конспект\n\n”
 “📤 <b>Загрузка:</b> /admin → Загрузить конспект\n”
 “Подпись к PDF: <code>29 Тема</code>”
 )
 else:
 text = (
 “📚 <b>Команды:</b>\n\n”
-“/list — список конспектов\n”
-“/get <номер> — получить конспект\n”
+“/list - список конспектов\n”
+“/get <номер> - получить конспект\n”
 “Пример: <code>/get 29</code>”
 )
 await update.message.reply_text(text, parse_mode=“HTML”)
