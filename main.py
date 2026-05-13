@@ -1,52 +1,28 @@
 import asyncio
-import logging
-import sys
-
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
 from database import init_db
+from utils import ensure_files_dir, logger
+
 from handlers import admin, user
 
 
-def setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-        stream=sys.stdout,
-    )
-    logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+async def main():
+    init_db()
+    ensure_files_dir()
 
-
-async def main() -> None:
-    setup_logging()
-    logger = logging.getLogger("bot")
-
-    await init_db()
-
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.include_router(admin.router)
     dp.include_router(user.router)
 
-    me = await bot.get_me()
-    logger.info("Бот запущен: @%s (id=%s)", me.username, me.id)
+    logger.info("Бот запущен")
 
-    try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-    finally:
-        await bot.session.close()
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    asyncio.run(main())
