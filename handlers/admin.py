@@ -1,281 +1,317 @@
-import logging
 import os
-from typing import Any, Awaitable, Callable
-
-from aiogram import Router, F, Bot, BaseMiddleware
+from aiogram import Router, F, Bot
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, TelegramObject
 
-import database as db
 from config import FILES_DIR
-from keyboards import replace_confirm_kb
-from utils import is_admin, parse_identifier
+from database import (
+    add_student,
+    remove_student,
+    get_students,
+    get_notes,
+    note_exists,
+    save_note,
+    delete_note
+)
+from keyboards import replace_note_keyboard
+from utils import is_admin, is_valid_number, normalize_student_value, logger
 
-logger = logging.getLogger(__name__)
-router = Router(name="admin")
-
-
-class AdminOnlyMiddleware(BaseMiddleware):
-    """Пропускает дальше только админа. Остальные события пойдут в следующий роутер."""
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        user = data.get("event_from_user")
-        if user is None or not is_admin(user.id):
-            return  # пропускаем — диспетчер передаст событие следующему роутеру
-        return await handler(event, data)
+router = Router()
 
 
-router.message.middleware(AdminOnlyMiddleware())
-router.callback_query.middleware(AdminOnlyMiddleware())
-
-
-class UploadStates(StatesGroup):
+class UploadNote(StatesGroup):
     waiting_number = State()
     waiting_title = State()
     waiting_replace_confirm = State()
 
 
-# ---------- управление учениками ----------
+def admin_only(message: Message):
+    return is_admin(message.from_user.id)
+
+
+async def save_uploaded_pdf(bot: Bot, document, number: int, title: str):
+    file_path = os.path.join(FILES_DIR, f"note_{number}.pdf")
+
+    await bot.download(
+        document,
+        destination=file_path
+    )
+
+    save_note(
+        number=number,
+        title=title,
+        file_path=file_path,
+        file_id=document.file_id
+    )
+
 
 @router.message(Command("add_student"))
-async def cmd_add_student(message: Message):
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer(
-            "Используйте: /add_student <telegram_id или @username>\n"
-            "Пример: /add_student 123456789\n"
-            "Пример: /add_student @ivan"
-        )
+async def add_student_handler(message: Message):
+    if not admin_only(message):
         return
 
-    tg_id, username = parse_identifier(parts[1])
-    if tg_id is None and not username:
-        await message.answer("⚠️ Не понял идентификатор. Используйте число или @username.")
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2:
+        await message.answer("Использование: /add_student 123456789 или /add_student @username")
         return
 
-    status = await db.add_student(telegram_id=tg_id, username=username)
-    label = f"@{username}" if username else str(tg_id)
-    if status == "added":
-        await message.answer(f"✅ Ученик {label} добавлен.")
-    elif status == "exists":
-        await message.answer(f"ℹ️ Ученик {label} уже есть в списке.")
-    else:
-        await message.answer("⚠️ Не удалось добавить.")
+    try:
+        value = normalize_student_value(args[1])
+        add_student(value)
+        await message.answer(f"✅ Ученик добавлен: {value}")
+    except Exception as e:
+        logger.exception(e)
+        await message.answer("Ошибка. Введите ID или @username.")
 
 
 @router.message(Command("add_students"))
-async def cmd_add_students(message: Message):
-    parts = (message.text or "").split()
-    if len(parts) < 2:
-        await message.answer(
-            "Используйте: /add_students <id или @username> [еще ...]\n"
-            "Пример: /add_students @user1 @user2 123456789"
-        )
+async def add_students_handler(message: Message):
+    if not admin_only(message):
         return
 
-    added, exists, invalid = [], [], []
-    for token in parts[1:]:
-        tg_id, username = parse_identifier(token)
-        if tg_id is None and not username:
-            invalid.append(token)
-            continue
-        status = await db.add_student(telegram_id=tg_id, username=username)
-        label = f"@{username}" if username else str(tg_id)
-        if status == "added":
-            added.append(label)
-        elif status == "exists":
-            exists.append(label)
-        else:
-            invalid.append(token)
+    values = message.text.split()[1:]
 
-    lines = []
+    if not values:
+        await message.answer("Использование: /add_students @user1 @user2 123456789")
+        return
+
+    added = []
+    errors = []
+
+    for value in values:
+        try:
+            normalized = normalize_student_value(value)
+            add_student(normalized)
+            added.append(normalized)
+        except Exception:
+            errors.append(value)
+
+    text = ""
+
     if added:
-        lines.append("✅ Добавлены: " + ", ".join(added))
-    if exists:
-        lines.append("ℹ️ Уже были: " + ", ".join(exists))
-    if invalid:
-        lines.append("⚠️ Не распознаны: " + ", ".join(invalid))
-    await message.answer("\n".join(lines) if lines else "Ничего не изменилось.")
+        text += "✅ Добавлены:\n" + "\n".join(added)
+
+    if errors:
+        text += "\n\n⚠️ Ошибка в данных:\n" + "\n".join(errors)
+
+    await message.answer(text)
 
 
 @router.message(Command("remove_student"))
-async def cmd_remove_student(message: Message):
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        await message.answer("Используйте: /remove_student <telegram_id или @username>")
+async def remove_student_handler(message: Message):
+    if not admin_only(message):
         return
 
-    tg_id, username = parse_identifier(parts[1])
-    if tg_id is None and not username:
-        await message.answer("⚠️ Не понял идентификатор.")
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2:
+        await message.answer("Использование: /remove_student 123456789 или /remove_student @username")
         return
 
-    ok = await db.remove_student(telegram_id=tg_id, username=username)
-    label = f"@{username}" if username else str(tg_id)
-    if ok:
-        await message.answer(f"🗑 Ученик {label} удалён.")
-    else:
-        await message.answer(f"❌ Ученик {label} не найден.")
+    try:
+        value = normalize_student_value(args[1])
+        deleted = remove_student(value)
+
+        if deleted:
+            await message.answer(f"✅ Ученик удалён: {value}")
+        else:
+            await message.answer("Ученик не найден.")
+    except Exception as e:
+        logger.exception(e)
+        await message.answer("Ошибка. Введите ID или @username.")
 
 
 @router.message(Command("students"))
-async def cmd_students(message: Message):
-    rows = await db.list_students()
-    if not rows:
-        await message.answer("👥 Список учеников пуст.")
+async def students_handler(message: Message):
+    if not admin_only(message):
         return
-    lines = ["👥 Ученики:\n"]
-    for tg_id, username, added_at in rows:
-        ident = f"@{username}" if username else str(tg_id)
-        lines.append(f"• {ident}  (добавлен: {added_at[:10]})")
-    await message.answer("\n".join(lines))
 
+    students = get_students()
 
-# ---------- управление конспектами ----------
+    if not students:
+        await message.answer("Список учеников пуст.")
+        return
+
+    text = "👥 Ученики:\n\n"
+
+    for telegram_id, username, added_at in students:
+        if telegram_id:
+            text += f"ID: {telegram_id} | добавлен: {added_at}\n"
+        else:
+            text += f"@{username} | добавлен: {added_at}\n"
+
+    await message.answer(text)
+
 
 @router.message(Command("notes"))
-async def cmd_notes(message: Message):
-    notes = await db.list_notes()
-    if not notes:
-        await message.answer("📭 Конспектов пока нет.")
+async def notes_handler(message: Message):
+    if not admin_only(message):
         return
-    lines = ["📚 Все конспекты:\n"]
-    for number, title in notes:
-        lines.append(f"№{number} — {title}")
-    await message.answer("\n".join(lines))
+
+    notes = get_notes()
+
+    if not notes:
+        await message.answer("Конспектов пока нет.")
+        return
+
+    text = "📚 Конспекты:\n\n"
+
+    for number, title, created_at, updated_at in notes:
+        text += f"№{number} — {title}\n"
+
+    await message.answer(text)
 
 
 @router.message(Command("delete_note"))
-async def cmd_delete_note(message: Message):
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip().isdigit():
-        await message.answer("Используйте: /delete_note <номер>")
+async def delete_note_handler(message: Message):
+    if not admin_only(message):
         return
 
-    number = int(parts[1].strip())
-    file_path = await db.delete_note(number)
-    if file_path is None:
-        await message.answer(f"❌ Конспект №{number} не найден.")
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2 or not is_valid_number(args[1]):
+        await message.answer("Использование: /delete_note 29")
         return
 
-    if file_path and os.path.exists(file_path):
-        try:
+    number = int(args[1])
+    note = delete_note(number)
+
+    if not note:
+        await message.answer(f"Конспект №{number} не найден.")
+        return
+
+    _, title, file_path, _ = note
+
+    try:
+        if os.path.exists(file_path):
             os.remove(file_path)
-        except OSError as e:
-            logger.warning("Не удалось удалить файл %s: %s", file_path, e)
+    except Exception as e:
+        logger.exception(e)
 
-    await message.answer(f"🗑 Конспект №{number} удалён.")
+    await message.answer(f"✅ Конспект №{number} удалён.\nТема: {title}")
 
-
-# ---------- загрузка PDF (FSM) ----------
 
 @router.message(F.document)
-async def on_document(message: Message, state: FSMContext):
-    doc = message.document
-    if not doc:
+async def upload_pdf_handler(message: Message, state: FSMContext):
+    if not admin_only(message):
         return
 
-    mime = (doc.mime_type or "").lower()
-    name = (doc.file_name or "").lower()
-    if mime != "application/pdf" and not name.endswith(".pdf"):
-        await message.answer("⚠️ Принимаются только PDF-файлы.")
+    document = message.document
+
+    if document.mime_type != "application/pdf" and not document.file_name.lower().endswith(".pdf"):
+        await message.answer("Отправьте именно PDF-файл.")
         return
 
-    await state.update_data(file_id=doc.file_id, original_name=doc.file_name)
-    await state.set_state(UploadStates.waiting_number)
+    await state.clear()
+    await state.update_data(document=document.model_dump())
+
+    await state.set_state(UploadNote.waiting_number)
     await message.answer("Введите номер конспекта:")
 
 
-@router.message(UploadStates.waiting_number, F.text)
-async def upload_get_number(message: Message, state: FSMContext):
-    text = (message.text or "").strip()
-    if not text.isdigit():
-        await message.answer("Номер должен быть числом. Введите ещё раз:")
+@router.message(UploadNote.waiting_number)
+async def note_number_handler(message: Message, state: FSMContext):
+    if not admin_only(message):
         return
 
-    number = int(text)
-    existing = await db.get_note(number)
-    if existing:
-        await state.update_data(number=number)
-        await state.set_state(UploadStates.waiting_replace_confirm)
-        await message.answer(
-            f"Конспект №{number} уже существует. Заменить?",
-            reply_markup=replace_confirm_kb(number),
-        )
+    if not is_valid_number(message.text.strip()):
+        await message.answer("Введите корректный номер. Например: 29")
         return
+
+    number = int(message.text.strip())
 
     await state.update_data(number=number)
-    await state.set_state(UploadStates.waiting_title)
+    await state.set_state(UploadNote.waiting_title)
     await message.answer("Введите тему конспекта:")
 
 
-@router.callback_query(UploadStates.waiting_replace_confirm, F.data.startswith("replace:"))
-async def upload_replace_confirm(call: CallbackQuery, state: FSMContext):
-    parts = call.data.split(":")
-    action = parts[1] if len(parts) > 1 else "no"
+@router.message(UploadNote.waiting_title)
+async def note_title_handler(message: Message, state: FSMContext, bot: Bot):
+    if not admin_only(message):
+        return
 
-    if action == "yes":
-        await state.set_state(UploadStates.waiting_title)
-        await call.message.edit_text("✅ Окей, заменяем. Введите тему конспекта:")
-    else:
-        await state.clear()
-        await call.message.edit_text("❌ Отменено.")
-    await call.answer()
+    title = message.text.strip()
 
-
-@router.message(UploadStates.waiting_title, F.text)
-async def upload_get_title(message: Message, state: FSMContext, bot: Bot):
-    title = (message.text or "").strip()
-    if not title:
-        await message.answer("Тема не может быть пустой. Введите тему конспекта:")
+    if len(title) < 2:
+        await message.answer("Введите нормальную тему конспекта.")
         return
 
     data = await state.get_data()
-    file_id = data.get("file_id")
-    number = data.get("number")
+    number = data["number"]
+    document_data = data["document"]
 
-    if not file_id or number is None:
-        await state.clear()
-        await message.answer("⚠️ Что-то пошло не так. Загрузите PDF заново.")
+    from aiogram.types import Document
+    document = Document(**document_data)
+
+    await state.update_data(title=title)
+
+    if note_exists(number):
+        await state.set_state(UploadNote.waiting_replace_confirm)
+        await message.answer(
+            f"Конспект №{number} уже существует. Заменить?",
+            reply_markup=replace_note_keyboard(number)
+        )
         return
-
-    target_path = FILES_DIR / f"note_{number}.pdf"
 
     try:
-        tg_file = await bot.get_file(file_id)
-        await bot.download_file(tg_file.file_path, destination=str(target_path))
-    except Exception as e:
-        logger.exception("Ошибка скачивания файла: %s", e)
+        await save_uploaded_pdf(bot, document, number, title)
         await state.clear()
-        await message.answer("⚠️ Не удалось скачать файл. Попробуйте ещё раз.")
+
+        await message.answer(
+            f"✅ Конспект сохранён!\n\n"
+            f"📘 Конспект №{number}\n"
+            f"Тема: {title}"
+        )
+    except Exception as e:
+        logger.exception(e)
+        await state.clear()
+        await message.answer("Ошибка при сохранении PDF.")
+
+
+@router.callback_query(F.data.startswith("replace_note:"))
+async def replace_note_callback(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
         return
 
-    status = await db.upsert_note(
-        number=number,
-        title=title,
-        file_path=str(target_path),
-        file_id=file_id,
-    )
+    data = await state.get_data()
+
+    if not data:
+        await callback.message.answer("Данные загрузки потеряны. Отправьте PDF заново.")
+        await callback.answer()
+        return
+
+    from aiogram.types import Document
+
+    number = data["number"]
+    title = data["title"]
+    document = Document(**data["document"])
+
+    try:
+        await save_uploaded_pdf(bot, document, number, title)
+        await state.clear()
+
+        await callback.message.edit_text(
+            f"✅ Конспект заменён!\n\n"
+            f"📘 Конспект №{number}\n"
+            f"Тема: {title}"
+        )
+    except Exception as e:
+        logger.exception(e)
+        await callback.message.answer("Ошибка при замене PDF.")
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cancel_replace")
+async def cancel_replace_callback(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
     await state.clear()
-
-    if status == "added":
-        await message.answer(f"✅ Конспект №{number} «{title}» сохранён.")
-    else:
-        await message.answer(f"♻️ Конспект №{number} обновлён, новая тема: «{title}».")
-
-
-@router.message(UploadStates.waiting_number)
-async def upload_number_wrong_type(message: Message):
-    await message.answer("Ожидаю номер конспекта числом. Например: 29")
-
-
-@router.message(UploadStates.waiting_title)
-async def upload_title_wrong_type(message: Message):
-    await message.answer("Ожидаю тему конспекта текстом.")
+    await callback.message.edit_text("❌ Замена отменена.")
+    await callback.answer()
