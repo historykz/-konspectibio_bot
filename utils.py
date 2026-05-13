@@ -1,26 +1,35 @@
+import os
 import logging
-from typing import Optional
+from config import FILES_DIR, ADMIN_ID
 
-from config import ADMIN_ID
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
 
 logger = logging.getLogger(__name__)
 
 
-def is_admin(user_id: int) -> bool:
+def ensure_files_dir():
+    os.makedirs(FILES_DIR, exist_ok=True)
+
+
+def is_admin(user_id: int):
     return user_id == ADMIN_ID
 
 
-def parse_identifier(token: str) -> tuple[Optional[int], Optional[str]]:
-    """
-    Принимает строку вроде '123456789' или '@username'.
-    Возвращает (telegram_id, username). Один из них всегда None.
-    """
-    token = token.strip()
-    if not token:
-        return None, None
-    if token.startswith("@"):
-        return None, token[1:].lower()
-    if token.isdigit():
-        return int(token), None
-    # username без @
-    return None, token.lower()
+def is_valid_number(text: str):
+    return text.isdigit() and int(text) > 0
+
+
+def normalize_student_value(value: str):
+    value = value.strip()
+
+    if value.startswith("@"):
+        return value
+
+    if value.isdigit():
+        return value
+
+    raise ValueError("Введите ID или @username")
