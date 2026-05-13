@@ -14,8 +14,7 @@ def init_db():
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER UNIQUE,
-            username TEXT UNIQUE,
+            value TEXT UNIQUE NOT NULL,
             added_at TEXT NOT NULL
         )
         """)
@@ -25,8 +24,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             number INTEGER UNIQUE NOT NULL,
             title TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            file_id TEXT,
+            file_path TEXT,
+            file_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -36,110 +35,80 @@ def init_db():
 
 
 def add_student(value: str):
+    value = value.strip().lower()
     now = datetime.now().isoformat(timespec="seconds")
 
-    telegram_id = None
-    username = None
-
-    value = value.strip()
-
-    if value.startswith("@"):
-        username = value[1:].lower()
-    else:
-        telegram_id = int(value)
-
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        INSERT OR IGNORE INTO students (telegram_id, username, added_at)
-        VALUES (?, ?, ?)
-        """, (telegram_id, username, now))
+        conn.execute(
+            "INSERT OR IGNORE INTO students (value, added_at) VALUES (?, ?)",
+            (value, now)
+        )
         conn.commit()
 
 
 def remove_student(value: str):
-    value = value.strip()
+    value = value.strip().lower()
 
     with get_connection() as conn:
-        cursor = conn.cursor()
-
-        if value.startswith("@"):
-            username = value[1:].lower()
-            cursor.execute("DELETE FROM students WHERE username = ?", (username,))
-        else:
-            telegram_id = int(value)
-            cursor.execute("DELETE FROM students WHERE telegram_id = ?", (telegram_id,))
-
+        cursor = conn.execute("DELETE FROM students WHERE value = ?", (value,))
         conn.commit()
         return cursor.rowcount
 
 
 def get_students():
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT telegram_id, username, added_at
-        FROM students
-        ORDER BY id DESC
-        """)
-        return cursor.fetchall()
+        return conn.execute(
+            "SELECT value, added_at FROM students ORDER BY id DESC"
+        ).fetchall()
 
 
 def is_student_allowed(telegram_id: int, username: str | None):
-    username = username.lower() if username else None
+    values = [str(telegram_id)]
+
+    if username:
+        values.append("@" + username.lower())
 
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT id FROM students
-        WHERE telegram_id = ?
-        OR username = ?
-        """, (telegram_id, username))
+        cursor = conn.execute(
+            f"SELECT id FROM students WHERE value IN ({','.join(['?'] * len(values))})",
+            values
+        )
         return cursor.fetchone() is not None
 
 
 def get_note(number: int):
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT number, title, file_path, file_id
-        FROM notes
-        WHERE number = ?
-        """, (number,))
-        return cursor.fetchone()
+        return conn.execute(
+            "SELECT number, title, file_path, file_id FROM notes WHERE number = ?",
+            (number,)
+        ).fetchone()
 
 
 def get_notes():
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT number, title, created_at, updated_at
-        FROM notes
-        ORDER BY number ASC
-        """)
-        return cursor.fetchall()
+        return conn.execute(
+            "SELECT number, title, created_at, updated_at FROM notes ORDER BY number ASC"
+        ).fetchall()
 
 
 def note_exists(number: int):
     return get_note(number) is not None
 
 
-def save_note(number: int, title: str, file_path: str, file_id: str):
+def save_note(number: int, title: str, file_path: str | None, file_id: str):
     now = datetime.now().isoformat(timespec="seconds")
 
     with get_connection() as conn:
-        cursor = conn.cursor()
-
         existing = get_note(number)
 
         if existing:
-            cursor.execute("""
+            conn.execute("""
             UPDATE notes
             SET title = ?, file_path = ?, file_id = ?, updated_at = ?
             WHERE number = ?
             """, (title, file_path, file_id, now, number))
         else:
-            cursor.execute("""
+            conn.execute("""
             INSERT INTO notes (number, title, file_path, file_id, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """, (number, title, file_path, file_id, now, now))
@@ -151,8 +120,7 @@ def delete_note(number: int):
     note = get_note(number)
 
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM notes WHERE number = ?", (number,))
+        conn.execute("DELETE FROM notes WHERE number = ?", (number,))
         conn.commit()
 
     return note
