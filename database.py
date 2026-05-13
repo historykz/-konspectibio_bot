@@ -1,126 +1,147 @@
-import sqlite3
-from datetime import datetime
-from config import DATABASE_PATH
+import aiosqlite
+from datetime import datetime, timezone
+from config import DB_PATH
 
 
-def get_connection():
-    return sqlite3.connect(DATABASE_PATH)
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def init_db():
-    with get_connection() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            value TEXT UNIQUE NOT NULL,
-            added_at TEXT NOT NULL
-        )
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE,
+                username TEXT UNIQUE,
+                added_at TEXT NOT NULL
+            )
         """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS notes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            number INTEGER UNIQUE NOT NULL,
-            title TEXT NOT NULL,
-            file_path TEXT,
-            file_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                number INTEGER UNIQUE NOT NULL,
+                title TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
         """)
-
-        conn.commit()
-
-
-def add_student(value: str):
-    value = value.strip().lower()
-    now = datetime.now().isoformat(timespec="seconds")
-
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO students (value, added_at) VALUES (?, ?)",
-            (value, now)
-        )
-        conn.commit()
+        await db.commit()
 
 
-def remove_student(value: str):
-    value = value.strip().lower()
+# ---------- STUDENTS ----------
 
-    with get_connection() as conn:
-        cursor = conn.execute("DELETE FROM students WHERE value = ?", (value,))
-        conn.commit()
-        return cursor.rowcount
+async def add_student(telegram_id: int | None = None, username: str | None = None) -> bool:
+    """ÐÐ¾Ð±Ð°Ð²Ð¸ÑÑ ÑÑÐµÐ½Ð¸ÐºÐ° Ð¿Ð¾ ID Ð¸Ð»Ð¸ @username. ÐÐ¾Ð·Ð²ÑÐ°ÑÐ°ÐµÑ True ÐµÑÐ»Ð¸ Ð´Ð¾Ð±Ð°Ð²Ð»ÐµÐ½, False ÐµÑÐ»Ð¸ ÑÐ¶Ðµ Ð±ÑÐ»."""
+    if not telegram_id and not username:
+        return False
+    username = username.lstrip("@").lower() if username else None
+    now = _now()
 
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Ð¿ÑÐ¾Ð²ÐµÑÑÐµÐ¼ ÑÑÑÐµÑÑÐ²Ð¾Ð²Ð°Ð½Ð¸Ðµ
+        if telegram_id:
+            cur = await db.execute("SELECT id FROM students WHERE telegram_id = ?", (telegram_id,))
+            if await cur.fetchone():
+                return False
+        if username:
+            cur = await db.execute("SELECT id FROM students WHERE username = ?", (username,))
+            if await cur.fetchone():
+                return False
 
-def get_students():
-    with get_connection() as conn:
-        return conn.execute(
-            "SELECT value, added_at FROM students ORDER BY id DESC"
-        ).fetchall()
-
-
-def is_student_allowed(telegram_id: int, username: str | None):
-    values = [str(telegram_id)]
-
-    if username:
-        values.append("@" + username.lower())
-
-    with get_connection() as conn:
-        cursor = conn.execute(
-            f"SELECT id FROM students WHERE value IN ({','.join(['?'] * len(values))})",
-            values
-        )
-        return cursor.fetchone() is not None
-
-
-def get_note(number: int):
-    with get_connection() as conn:
-        return conn.execute(
-            "SELECT number, title, file_path, file_id FROM notes WHERE number = ?",
-            (number,)
-        ).fetchone()
+        try:
+            await db.execute(
+                "INSERT INTO students (telegram_id, username, added_at) VALUES (?, ?, ?)",
+                (telegram_id, username, now),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
 
 
-def get_notes():
-    with get_connection() as conn:
-        return conn.execute(
-            "SELECT number, title, created_at, updated_at FROM notes ORDER BY number ASC"
-        ).fetchall()
-
-
-def note_exists(number: int):
-    return get_note(number) is not None
-
-
-def save_note(number: int, title: str, file_path: str | None, file_id: str):
-    now = datetime.now().isoformat(timespec="seconds")
-
-    with get_connection() as conn:
-        existing = get_note(number)
-
-        if existing:
-            conn.execute("""
-            UPDATE notes
-            SET title = ?, file_path = ?, file_id = ?, updated_at = ?
-            WHERE number = ?
-            """, (title, file_path, file_id, now, number))
+async def remove_student(telegram_id: int | None = None, username: str | None = None) -> bool:
+    username = username.lstrip("@").lower() if username else None
+    async with aiosqlite.connect(DB_PATH) as db:
+        if telegram_id:
+            cur = await db.execute("DELETE FROM students WHERE telegram_id = ?", (telegram_id,))
         else:
-            conn.execute("""
-            INSERT INTO notes (number, title, file_path, file_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (number, title, file_path, file_id, now, now))
-
-        conn.commit()
+            cur = await db.execute("DELETE FROM students WHERE username = ?", (username,))
+        await db.commit()
+        return cur.rowcount > 0
 
 
-def delete_note(number: int):
-    note = get_note(number)
+async def is_student(telegram_id: int, username: str | None = None) -> bool:
+    username = username.lstrip("@").lower() if username else None
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT id FROM students WHERE telegram_id = ?", (telegram_id,))
+        if await cur.fetchone():
+            return True
+        if username:
+            cur = await db.execute("SELECT id FROM students WHERE username = ?", (username,))
+            if await cur.fetchone():
+                # Ð´Ð¾ÑÑÑÐ°Ð½Ð°Ð²Ð»Ð¸Ð²Ð°ÐµÐ¼ telegram_id, ÑÑÐ¾Ð±Ñ Ð±ÑÑÑÑÐµÐµ Ð½Ð°ÑÐ¾Ð´Ð¸ÑÑ Ð´Ð°Ð»ÑÑÐµ
+                await db.execute(
+                    "UPDATE students SET telegram_id = ? WHERE username = ? AND telegram_id IS NULL",
+                    (telegram_id, username),
+                )
+                await db.commit()
+                return True
+    return False
 
-    with get_connection() as conn:
-        conn.execute("DELETE FROM notes WHERE number = ?", (number,))
-        conn.commit()
 
-    return note
+async def list_students() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT telegram_id, username, added_at FROM students ORDER BY id")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- NOTES ----------
+
+async def get_note(number: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM notes WHERE number = ?", (number,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def save_note(number: int, title: str, file_path: str, file_id: str | None) -> None:
+    now = _now()
+    async with aiosqlite.connect(DB_PATH) as db:
+        existing = await db.execute("SELECT id FROM notes WHERE number = ?", (number,))
+        if await existing.fetchone():
+            await db.execute(
+                "UPDATE notes SET title = ?, file_path = ?, file_id = ?, updated_at = ? WHERE number = ?",
+                (title, file_path, file_id, now, number),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO notes (number, title, file_path, file_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (number, title, file_path, file_id, now, now),
+            )
+        await db.commit()
+
+
+async def delete_note(number: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM notes WHERE number = ?", (number,))
+        row = await cur.fetchone()
+        if not row:
+            return None
+        await db.execute("DELETE FROM notes WHERE number = ?", (number,))
+        await db.commit()
+        return dict(row)
+
+
+async def list_notes() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT number, title FROM notes ORDER BY number")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
