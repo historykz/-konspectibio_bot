@@ -1,35 +1,18 @@
-import os
-import logging
-from config import FILES_DIR, ADMIN_ID
+from config import ADMIN_ID
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-)
-
-logger = logging.getLogger(__name__)
-
-
-def ensure_files_dir():
-    os.makedirs(FILES_DIR, exist_ok=True)
-
-
-def is_admin(user_id: int):
+def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
 
-def is_valid_number(text: str):
-    return text.isdigit() and int(text) > 0
-
-
-def normalize_student_value(value: str):
-    value = value.strip()
-
-    if value.startswith("@"):
-        return value
-
-    if value.isdigit():
-        return value
-
-    raise ValueError("Введите ID или @username")
+def parse_identifier(arg: str) -> tuple[int | None, str | None]:
+    """Парсит @username или telegram_id из строки."""
+    arg = arg.strip()
+    if not arg:
+        return None, None
+    if arg.startswith("@"):
+        return None, arg
+    if arg.isdigit():
+        return int(arg), None
+    # просто username без @
+    return None, "@" + arg
