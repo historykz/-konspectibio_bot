@@ -1,31 +1,31 @@
-import os
+import logging
+from pathlib import Path
+
 from aiogram import Router, F
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, FSInputFile
+
 from config import ADMIN_ID
-from database import is_student_allowed, get_note, get_notes
-from utils import is_valid_number, is_admin, logger
+from database import is_student, get_note, list_notes
+from utils import is_admin
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
-@router.message(F.text == "/start")
-async def start_handler(message: Message):
+@router.message(CommandStart())
+async def start(message: Message):
     if is_admin(message.from_user.id):
         await message.answer(
-            "Здравствуйте, администратор 👑\n\n"
+            "Здравствуйте, администратор 👑\n"
             "Вы можете:\n"
-            "📌 загрузить PDF-конспект\n"
-            "📌 добавить ученика\n"
-            "📌 удалить ученика\n"
-            "📌 заменить конспект\n"
-            "📌 посмотреть список конспектов\n\n"
-            "Команды:\n"
-            "/add_student 123456789\n"
-            "/add_students @user1 @user2\n"
-            "/remove_student 123456789\n"
-            "/students\n"
-            "/notes\n"
-            "/delete_note 29"
+            "📌 загрузить PDF-конспект (просто отправьте PDF)\n"
+            "📌 добавить ученика — /add_student <id|@username>\n"
+            "📌 массово — /add_students @u1 @u2 ...\n"
+            "📌 удалить ученика — /remove_student <id|@username>\n"
+            "📌 список учеников — /students\n"
+            "📌 список конспектов — /notes\n"
+            "📌 удалить конспект — /delete_note <номер>"
         )
         return
 
@@ -36,82 +36,73 @@ async def start_handler(message: Message):
     )
 
 
-@router.message(F.text == "/list")
-async def list_notes_handler(message: Message):
+@router.message(Command("list"))
+async def cmd_list(message: Message):
+    # ученики тоже могут смотреть, но только если у них есть доступ
     if not is_admin(message.from_user.id):
-        allowed = is_student_allowed(
-            telegram_id=message.from_user.id,
-            username=message.from_user.username
-        )
-
+        allowed = await is_student(message.from_user.id, message.from_user.username)
         if not allowed:
-            await message.answer(
-                "⛔ У вас нет доступа к конспектам. Обратитесь к администратору."
-            )
+            await message.answer("⛔ У вас нет доступа к конспектам. Обратитесь к администратору.")
             return
 
-    notes = get_notes()
-
+    notes = await list_notes()
     if not notes:
-        await message.answer("Пока нет загруженных конспектов.")
+        await message.answer("Пока нет ни одного конспекта.")
         return
 
-    text = "📚 Список доступных конспектов:\n\n"
-
-    for number, title, created_at, updated_at in notes:
-        text += f"№{number} — {title}\n"
-
+    text = "📚 Доступные конспекты:\n\n"
+    text += "\n".join(f"№{n['number']} — {n['title']}" for n in notes)
     await message.answer(text)
 
 
-@router.message(F.text)
-async def get_note_by_number_handler(message: Message):
-    text = message.text.strip()
-
-    if text.startswith("/"):
-        return
-
-    if not is_valid_number(text):
-        await message.answer("Введите только номер конспекта. Например: 29")
-        return
-
+@router.message(F.text.regexp(r"^\s*\d+\s*$"))
+async def send_note(message: Message):
+    # админу тоже отвечаем, чтобы он мог проверить
     if not is_admin(message.from_user.id):
-        allowed = is_student_allowed(
-            telegram_id=message.from_user.id,
-            username=message.from_user.username
-        )
-
+        allowed = await is_student(message.from_user.id, message.from_user.username)
         if not allowed:
-            await message.answer(
-                "⛔ У вас нет доступа к конспектам. Обратитесь к администратору."
-            )
+            await message.answer("⛔ У вас нет доступа к конспектам. Обратитесь к администратору.")
             return
 
-    number = int(text)
-    note = get_note(number)
-
-    if not note:
-        await message.answer(f"Конспект №{number} не найден.")
+    try:
+        number = int(message.text.strip())
+    except ValueError:
         return
 
-    note_number, title, file_path, file_id = note
+    note = await get_note(number)
+    if not note:
+        await message.answer(f"Конспект №{number} не найден. Посмотрите список: /list")
+        return
+
+    # сначала пробуем по file_id (быстрее), потом по файлу
+    try:
+        if note.get("file_id"):
+            await message.answer_document(
+                document=note["file_id"],
+                caption=f"📘 Конспект №{note['number']}\nТема: {note['title']}",
+            )
+            return
+    except Exception as e:
+        logger.warning("file_id не сработал для конспекта %s: %s", number, e)
+
+    file_path = Path(note["file_path"])
+    if not file_path.exists():
+        logger.error("PDF не найден на диске: %s", file_path)
+        await message.answer("⚠️ Файл конспекта не найден на сервере. Сообщите администратору.")
+        return
 
     try:
-        caption = f"📘 Конспект №{note_number}\nТема: {title}"
-
-        if os.path.exists(file_path):
-            await message.answer_document(
-                document=FSInputFile(file_path),
-                caption=caption
-            )
-        elif file_id:
-            await message.answer_document(
-                document=file_id,
-                caption=caption
-            )
-        else:
-            await message.answer("PDF-файл не найден. Обратитесь к администратору.")
-
+        await message.answer_document(
+            document=FSInputFile(file_path),
+            caption=f"📘 Конспект №{note['number']}\nТема: {note['title']}",
+        )
     except Exception as e:
-        logger.exception(e)
-        await message.answer("Произошла ошибка при отправке PDF.")
+        logger.exception("Ошибка отправки конспекта %s: %s", number, e)
+        await message.answer("⚠️ Не удалось отправить файл. Попробуйте позже.")
+
+
+@router.message(F.text)
+async def fallback(message: Message):
+    if is_admin(message.from_user.id):
+        return  # админу не мешаем — у него свои хендлеры
+    await message.answer("Введите номер конспекта цифрами, например: 29\nИли /list — список доступных.")
