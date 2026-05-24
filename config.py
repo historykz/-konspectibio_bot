@@ -1,19 +1,17 @@
 import os
-from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+ADMINS: list[int] = [int(x.strip()) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
 
-BASE_DIR = Path(__file__).parent
-FILES_DIR = BASE_DIR / "files"
-DB_PATH = BASE_DIR / "bot.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FILES_DIR = os.path.join(BASE_DIR, "files")
+CHECKLISTS_DIR = os.path.join(BASE_DIR, "checklists")
+TEMP_DIR = os.path.join(BASE_DIR, "temp")
+SUBMISSIONS_DIR = os.path.join(BASE_DIR, "submissions")
+DB_PATH = os.path.join(BASE_DIR, "bot.db")
 
-FILES_DIR.mkdir(exist_ok=True)
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN не задан в .env")
-if not ADMIN_ID:
-    raise RuntimeError("ADMIN_ID не задан в .env")
+for d in [FILES_DIR, CHECKLISTS_DIR, TEMP_DIR, SUBMISSIONS_DIR]:
+    os.makedirs(d, exist_ok=True)
