@@ -1,0 +1,8 @@
+aiogram==3.13.1
+aiohttp==3.10.5
+aiosqlite==0.20.0
+APScheduler==3.10.4
+python-dotenv==1.0.1
+Pillow==10.4.0
+img2pdf==0.5.1
+openpyxl==3.1.5
